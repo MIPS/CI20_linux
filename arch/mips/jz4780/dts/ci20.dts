@@ -30,7 +30,7 @@
 	compatible = "img,ci20";
 
 	chosen {
-		bootargs = "console=ttyS0,115200 clk_ignore_unused";
+		bootargs = "console=ttyS0,115200 clk_ignore_unused root=/dev/mmcblk0p1 rootwait";
 	};
 
 	memory {
