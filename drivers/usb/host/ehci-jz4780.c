@@ -53,6 +53,7 @@ static int jz4780_ehci_probe(struct platform_device *pdev)
 	struct ehci_hcd *ehci;
 	struct jz4780_ehci_hcd *jz_ehci;
 	int irq, gpio_vbus, err = 0;
+	u32 temp;
 
 	/* Right now device-tree probed devices don't get dma_mask set.
 	 * Since shared usb code relies on it, set it here for now.
@@ -139,11 +140,17 @@ static int jz4780_ehci_probe(struct platform_device *pdev)
 		goto cleanup_clk_en;
 	}
 
+	jz4780_cgu_start_ehci();
+
 	err = usb_add_hcd(hcd, irq, IRQF_SHARED);
 	if (err) {
 		dev_err(&pdev->dev, "failed to add USB HCD\n");
 		goto cleanup_clk_en;
 	}
+
+	/* Set utmi data bus width of controller to 16bit */
+	temp = readl((volatile int *)EHCI_REG_UTMI_BUS);
+	writel(temp | UTMIBUS_WIDTH, (volatile int *)EHCI_REG_UTMI_BUS);
 
 	return err;
 
@@ -166,6 +173,8 @@ static int jz4780_ehci_remove(struct platform_device *pdev)
 
 	usb_remove_hcd(hcd);
 	usb_put_hcd(hcd);
+
+	jz4780_cgu_stop_ehci();
 
 	clk_disable_unprepare(jz_ehci->clk);
 
