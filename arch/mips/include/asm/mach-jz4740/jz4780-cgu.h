@@ -115,6 +115,8 @@
 
 /* Bits within the UTMI Bus register */
 #define UTMIBUS_WIDTH		BIT(6)
+/* bits within the SRBC register */
+#define SRBC_UHC_SR		BIT(14)
 
 /* bits within the SRBC register */
 #define SRBC_UHC_SR		BIT(14)
