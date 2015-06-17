@@ -54,6 +54,7 @@
 #define CGU_REG_MSC1CDR		0xa4
 #define CGU_REG_MSC2CDR		0xa8
 #define CGU_REG_BCHCDR		0xac
+#define CGU_REG_SRBC		0xc4
 #define CGU_REG_CLOCKSTATUS	0xd4
 
 /* bits within a PLL control register */
@@ -100,6 +101,8 @@
 #define USBPCR1_USB_SEL		BIT(28)
 #define USBPCR1_WORD_IF0	BIT(19)
 #define USBPCR1_WORD_IF1	BIT(18)
+#define USBPCR1_DPPD1		BIT(22)
+#define USBPCR1_DMPD1		BIT(23)
 
 /* bits within the USBRDT register */
 #define USBRDT_VBFIL_LD_EN	BIT(25)
@@ -109,6 +112,9 @@
 #define USBVBFIL_IDDIGFIL_SHIFT	16
 #define USBVBFIL_IDDIGFIL_MASK	(0xffff << USBVBFIL_IDDIGFIL_SHIFT)
 #define USBVBFIL_USBVBFIL_MASK	(0xffff)
+
+/* bits within the SRBC register */
+#define SRBC_UHC_SR		BIT(14)
 
 static struct jz47xx_cgu *cgu;
 
@@ -967,3 +973,74 @@ int jz4780_cgu_set_usbpcr_param(u32 param, bool enable)
 	return 0;
 }
 EXPORT_SYMBOL_GPL(jz4780_cgu_set_usbpcr_param);
+
+void jz4780_cgu_stop_ehci(void)
+{
+	u32 reg;
+
+	reg = readl(cgu->base + CGU_REG_OPCR);
+	writel(reg & (~OPCR_SPENDN1), cgu->base + CGU_REG_OPCR);
+}
+EXPORT_SYMBOL_GPL(jz4780_cgu_stop_ehci);
+
+int jz4780_cgu_start_ehci(void)
+{
+	static int has_reset;
+	int ret = 0;
+	unsigned long flags;
+	u32 reg;
+
+	spin_lock_irqsave(&cgu->power_lock, flags);
+	reg = readl(cgu->base + CGU_REG_USBPCR);
+	writel(reg & (~USBPCR_OTG_DISABLE), cgu->base + CGU_REG_USBPCR);
+
+	/* The PLL uses CLKCORE as reference */
+	reg = readl(cgu->base + CGU_REG_USBPCR1);
+	writel(reg | USBPCR1_REFCLKSEL_MASK, cgu->base + CGU_REG_USBPCR1);
+	spin_unlock_irqrestore(&cgu->power_lock, flags);
+
+	/* NOTE: hw and parent_rate aren't used, so we can set them to
+	 * whatever. They are only there for compatibility with clk_ops.*/
+	jz4780_otg_phy_set_rate(NULL,
+			clk_get_rate(cgu->clocks.clks[JZ4780_CLK_EXCLK]), 0);
+
+	spin_lock_irqsave(&cgu->power_lock, flags);
+	/* Don't force port1(uhc) into suspend mode. */
+	reg = readl(cgu->base + CGU_REG_OPCR);
+	writel(reg | OPCR_SPENDN1, cgu->base + CGU_REG_OPCR);
+
+	/* port1's pulldown resistance on D- */
+	reg = readl(cgu->base + CGU_REG_USBPCR1);
+	writel(reg | USBPCR1_DMPD1, cgu->base + CGU_REG_USBPCR1);
+
+	/* port1's pulldown resistance on D+ */
+	reg = readl(cgu->base + CGU_REG_USBPCR1);
+	writel(reg | USBPCR1_DPPD1, cgu->base + CGU_REG_USBPCR1);
+	spin_unlock_irqrestore(&cgu->power_lock, flags);
+
+	ret = jz4780_cgu_set_usb_utmi_bus_width(USB_PORT_HOST,
+			USB_PORT_UTMI_BUS_WIDTH_16);
+	if (ret)
+		return ret;
+
+	/* Set utmi data bus width of controller to 16bit */
+	reg = readl((volatile int *)EHCI_REG_UTMI_BUS);
+	writel(reg | UTMIBUS_WIDTH, (volatile int *)EHCI_REG_UTMI_BUS);
+
+	jz4780_cgu_usb_reset();
+
+	if (!has_reset) {
+		/* UHC soft reset */
+		/* TODO: Check if these delays are correct */
+		reg = readl(cgu->base + CGU_REG_SRBC);
+		writel(reg | SRBC_UHC_SR, cgu->base + CGU_REG_SRBC);
+		udelay(300);
+		reg = readl(cgu->base + CGU_REG_SRBC);
+		writel(reg & ~(SRBC_UHC_SR), cgu->base + CGU_REG_SRBC);
+		udelay(300);
+		has_reset = 1;
+	}
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(jz4780_cgu_start_ehci);

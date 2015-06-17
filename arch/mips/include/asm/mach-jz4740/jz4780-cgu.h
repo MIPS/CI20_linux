@@ -50,7 +50,12 @@
 #define CGU_REG_MSC1CDR		0xa4
 #define CGU_REG_MSC2CDR		0xa8
 #define CGU_REG_BCHCDR		0xac
+#define CGU_REG_SRBC		0xc4
 #define CGU_REG_CLOCKSTATUS	0xd4
+
+/* This isn't documented in the Ingenic manual but was provided in their
+ * kernel as a hack. */
+#define EHCI_REG_UTMI_BUS	0xb34900b0
 
 /* bits within a PLL control register */
 #define PLLCTL_M_SHIFT		19
@@ -96,6 +101,8 @@
 #define USBPCR1_USB_SEL		BIT(28)
 #define USBPCR1_WORD_IF0	BIT(19)
 #define USBPCR1_WORD_IF1	BIT(18)
+#define USBPCR1_DPPD1		BIT(22)
+#define USBPCR1_DMPD1		BIT(23)
 
 /* bits within the USBRDT register */
 #define USBRDT_VBFIL_LD_EN	BIT(25)
@@ -105,6 +112,12 @@
 #define USBVBFIL_IDDIGFIL_SHIFT	16
 #define USBVBFIL_IDDIGFIL_MASK	(0xffff << USBVBFIL_IDDIGFIL_SHIFT)
 #define USBVBFIL_USBVBFIL_MASK	(0xffff)
+
+/* Bits within the UTMI Bus register */
+#define UTMIBUS_WIDTH		BIT(6)
+
+/* bits within the SRBC register */
+#define SRBC_UHC_SR		BIT(14)
 
 enum jz4780_usb_port {
 	USB_PORT_OTG	= 0,
@@ -193,5 +206,19 @@ extern void jz4780_cgu_usb_reset(void);
  * Returns zero on success, else -ERRNO.
  */
 extern int jz4780_cgu_set_usbpcr_param(u32 param, bool enable);
+
+/**
+ * jz4780_cgu_start_ehci - Setup SoC registers so that EHCI mode can work.
+ * Returns zero on success, else -ERRNO.
+ */
+extern int jz4780_cgu_start_ehci(void);
+
+/**
+ * jz4780_cgu_stop_ehci - Force the USB port into suspend mode, thus disabling
+ * EHCI.
+ */
+extern void jz4780_cgu_stop_ehci(void);
+
+extern int jz4780_cgu_start_ehci(void);
 
 #endif /* __MIPS_ASM_MACH_JZ4780_JZ4780_CGU_H__ */
