@@ -165,7 +165,6 @@
 
 	dm9000@6 {
 		compatible = "davicom,dm9000";
-		davicom,no-eeprom;
 
 		reg = <6 0x0 1   /* addr */
 		       6 0x2 1>; /* data */
