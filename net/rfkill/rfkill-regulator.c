@@ -19,6 +19,7 @@
 #include <linux/regulator/consumer.h>
 #include <linux/rfkill.h>
 #include <linux/rfkill-regulator.h>
+#include <linux/of_platform.h>
 
 struct rfkill_regulator_data {
 	struct rfkill *rf_kill;
@@ -57,6 +58,31 @@ static struct rfkill_ops rfkill_regulator_ops = {
 	.set_block = rfkill_regulator_set_block,
 };
 
+#ifdef CONFIG_OF
+static struct rfkill_regulator_platform_data *
+rfkill_regulator_parse_pdata(struct device *dev)
+{
+	struct rfkill_regulator_platform_data *pdata;
+	struct device_node *np = dev->of_node;
+	u32 num;
+	if (!np)
+		return NULL;
+	pdata = devm_kzalloc(dev, sizeof(*pdata), GFP_KERNEL);
+	if (!pdata)
+		return NULL;
+	if (of_property_read_u32(np, "type", &num) == 0)
+		pdata->type = num;
+	of_property_read_string(np, "label", &pdata->name);
+	return pdata;
+}
+#else
+static inline struct rfkill_regulator_platform_data *
+rfkill_regulator_parse_pdata(struct device *dev)
+{
+	return NULL;
+}
+#endif
+
 static int rfkill_regulator_probe(struct platform_device *pdev)
 {
 	struct rfkill_regulator_platform_data *pdata = pdev->dev.platform_data;
@@ -64,6 +90,9 @@ static int rfkill_regulator_probe(struct platform_device *pdev)
 	struct regulator *vcc;
 	struct rfkill *rf_kill;
 	int ret = 0;
+
+	if (!pdata)
+		pdata = rfkill_regulator_parse_pdata(&pdev->dev);
 
 	if (pdata == NULL) {
 		dev_err(&pdev->dev, "no platform data\n");
@@ -137,12 +166,21 @@ static int rfkill_regulator_remove(struct platform_device *pdev)
 	return 0;
 }
 
+#ifdef CONFIG_OF
+static const struct of_device_id rfkill_regulator_match[] = {
+	{.compatible = "rfkill-regulator"},
+	{}
+};
+MODULE_DEVICE_TABLE(of, rfkill_regulator_match);
+#endif
+
 static struct platform_driver rfkill_regulator_driver = {
 	.probe = rfkill_regulator_probe,
 	.remove = rfkill_regulator_remove,
 	.driver = {
 		.name = "rfkill-regulator",
 		.owner = THIS_MODULE,
+		.of_match_table = of_match_ptr(rfkill_regulator_match),
 	},
 };
 
