@@ -132,9 +132,10 @@ EARLYCON_DECLARE(jz4780_uart, ingenic_early_console_setup);
 OF_EARLYCON_DECLARE(jz4780_uart, "ingenic,jz4780-uart",
 		    ingenic_early_console_setup);
 
+
 static void ingenic_uart_serial_out(struct uart_port *p, int offset, int value)
 {
-	int mcr, orig;
+	int ier;
 
 	switch (offset) {
 	case UART_FCR:
@@ -143,19 +144,20 @@ static void ingenic_uart_serial_out(struct uart_port *p, int offset, int value)
 		break;
 
 	case UART_IER:
+		/* Enable receive timeout interrupt with the
+		 * receive line status interrupt */
+		value |= (value & 0x4) << 2;
+		break;
+
+	case UART_MCR:
 		/* If we have enabled modem status IRQs we should enable modem
 		 * mode. */
-		mcr = orig = p->serial_in(p, UART_MCR);
-		if (value & UART_IER_MSI) {
-			mcr |= UART_MCR_MDCE | UART_MCR_FCM;
-		} else {
-			mcr &= ~(UART_MCR_MDCE | UART_MCR_FCM);
-		}
+		ier = p->serial_in(p, UART_IER);
 
-		if (mcr != orig)
-			ingenic_uart_serial_out(p, UART_MCR, mcr);
-
-		value |= (value & 0x4) << 2;
+		if (ier & UART_IER_MSI)
+			value |= UART_MCR_MDCE | UART_MCR_FCM;
+		else
+			value &= ~(UART_MCR_MDCE | UART_MCR_FCM);
 		break;
 
 	default:
@@ -163,6 +165,28 @@ static void ingenic_uart_serial_out(struct uart_port *p, int offset, int value)
 	}
 
 	writeb(value, p->membase + (offset << p->regshift));
+}
+
+static unsigned int ingenic_uart_serial_in(struct uart_port *p, int offset)
+{
+	unsigned int value;
+
+	value = readb(p->membase + (offset << p->regshift));
+
+	/* Hide non-16550 compliant bits from higher levels */
+	switch (offset) {
+	case UART_FCR:
+		value &= ~UART_FCR_UME;
+		break;
+
+	case UART_MCR:
+		value &= ~(UART_MCR_MDCE | UART_MCR_FCM);
+		break;
+
+	default:
+		break;
+	}
+	return value;
 }
 
 static int ingenic_uart_probe(struct platform_device *pdev)
@@ -189,6 +213,7 @@ static int ingenic_uart_probe(struct platform_device *pdev)
 	uart.port.mapbase = regs->start;
 	uart.port.regshift = 2;
 	uart.port.serial_out = ingenic_uart_serial_out;
+	uart.port.serial_in = ingenic_uart_serial_in;
 	uart.port.irq = irq->start;
 	uart.port.dev = &pdev->dev;
 
