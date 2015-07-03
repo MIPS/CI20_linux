@@ -191,6 +191,7 @@ static unsigned int ingenic_uart_serial_in(struct uart_port *p, int offset)
 
 static int ingenic_uart_probe(struct platform_device *pdev)
 {
+	struct device_node *np = pdev->dev.of_node;
 	struct uart_8250_port uart = {};
 	struct resource *regs = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	struct resource *irq = platform_get_resource(pdev, IORESOURCE_IRQ, 0);
@@ -208,7 +209,7 @@ static int ingenic_uart_probe(struct platform_device *pdev)
 
 	spin_lock_init(&uart.port.lock);
 	uart.port.type = PORT_16550;
-	uart.port.flags = UPF_SKIP_TEST | UPF_IOREMAP | UPF_FIXED_TYPE;
+	uart.port.flags = UPF_SKIP_TEST | UPF_IOREMAP;
 	uart.port.iotype = UPIO_MEM;
 	uart.port.mapbase = regs->start;
 	uart.port.regshift = 2;
@@ -216,6 +217,15 @@ static int ingenic_uart_probe(struct platform_device *pdev)
 	uart.port.serial_in = ingenic_uart_serial_in;
 	uart.port.irq = irq->start;
 	uart.port.dev = &pdev->dev;
+	if (of_device_is_compatible(np, "ingenic,jz4780-uart")) {
+		uart.port.fifosize = 64;
+		uart.tx_loadsz = 32;
+		uart.fcr = UART_FCR_ENABLE_FIFO | UART_FCR_R_TRIG_10;
+		uart.capabilities = UART_CAP_FIFO | UART_CAP_RTOIE;
+	} else {
+		/* Use defaults */
+		uart.port.flags |= UPF_FIXED_TYPE;
+	}
 
 	/* Check for a fixed line number */
 	line = of_alias_get_id(pdev->dev.of_node, "serial");
