@@ -1,5 +1,6 @@
 /dts-v1/;
 #include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/net/rfkill-regulator.h>
 #include "jz4780.dtsi"
 
 / {
@@ -69,7 +70,6 @@
 		regulator-name = "bt_reset_gpio";
 		gpio = <&gpf 8 0>;
 		enable-active-high;
-		regulator-always-on;
 	};
 
 	/* HACK: Keeping BT_reg_on high. No simple driver fix */
@@ -88,6 +88,13 @@
 		gpio = <&gpf 5 0>;
 		enable-active-high;
 		regulator-always-on;
+	};
+
+	bt-rfkill {
+		compatible = "rfkill-regulator";
+		label = "bt-reset";
+		type = <RFKILL_TYPE_BLUETOOTH>;
+		vrfkill-supply = <&bt_reset>;
 	};
 };
 
