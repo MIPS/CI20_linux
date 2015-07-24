@@ -245,14 +245,14 @@ static int ingenic_asoc_ci20_probe(struct platform_device *pdev)
 		ci20_dai_link[0].codec_name = NULL;
 	}
 
-	ret = gpio_request(GPIO_HP_MUTE, "Headphone Mute");
+	ret = devm_gpio_request(&pdev->dev, GPIO_HP_MUTE, "Headphone Mute");
 	if (ret < 0)
 		dev_warn(&pdev->dev, "Failed to request mute GPIO: %d\n",
 			 ret);
 
 	gpio_direction_output(GPIO_HP_MUTE, 1);
 
-	ret = gpio_request(GPIO_MIC_SW_EN, "Mic Switch Enable");
+	ret = devm_gpio_request(&pdev->dev, GPIO_MIC_SW_EN, "Mic Switch Enable");
 	if (ret < 0)
 		dev_warn(&pdev->dev,
 			 "Failed to request mic switch enable GPIO: %d\n",
@@ -273,8 +273,6 @@ static int ingenic_asoc_ci20_remove(struct platform_device *pdev)
 
 	snd_soc_unregister_card(card);
 	snd_soc_jack_free_gpios(&ci20_hp_jack, 1, &ci20_hp_jack_gpio);
-	gpio_free(GPIO_MIC_SW_EN);
-	gpio_free(GPIO_HP_MUTE);
 
 	return 0;
 }
