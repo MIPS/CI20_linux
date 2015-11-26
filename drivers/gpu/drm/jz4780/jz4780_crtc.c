@@ -150,12 +150,12 @@ static void set_scanout(struct drm_crtc *crtc, int n)
 	pm_runtime_put_sync(dev->dev);
 }
 
-static void update_scanout(struct drm_crtc *crtc)
+static void update_scanout(struct drm_crtc *crtc, bool async)
 {
 	struct jz4780_crtc *jz4780_crtc = to_jz4780_crtc(crtc);
 	struct drm_device *dev = crtc->dev;
 
-	if (jz4780_crtc->dpms == DRM_MODE_DPMS_ON) {
+	if (!async && (jz4780_crtc->dpms == DRM_MODE_DPMS_ON)) {
 		jz4780_crtc->dirty |= LCDC_STATE_IFU0 | LCDC_STATE_IFU1;
 		drm_vblank_get(dev, 0);
 	} else {
@@ -222,6 +222,8 @@ static int jz4780_crtc_page_flip(struct drm_crtc *crtc,
 {
 	struct jz4780_crtc *jz4780_crtc = to_jz4780_crtc(crtc);
 	struct drm_device *dev = crtc->dev;
+	bool async_flip = page_flip_flags & DRM_MODE_PAGE_FLIP_ASYNC;
+	unsigned long flags;
 
 	if (jz4780_crtc->event) {
 		dev_err(dev->dev, "already pending page flip!\n");
@@ -229,8 +231,17 @@ static int jz4780_crtc_page_flip(struct drm_crtc *crtc,
 	}
 
 	crtc->primary->fb = fb;
-	jz4780_crtc->event = event;
-	update_scanout(crtc);
+
+	if (!async_flip)
+		jz4780_crtc->event = event;
+
+	update_scanout(crtc, async_flip);
+
+	if (event && async_flip) {
+		spin_lock_irqsave(&dev->event_lock, flags);
+		drm_send_vblank_event(dev, 0, event);
+		spin_unlock_irqrestore(&dev->event_lock, flags);
+	}
 
 	return 0;
 }
@@ -351,7 +362,7 @@ static int jz4780_crtc_mode_set(struct drm_crtc *crtc,
 
 	jz4780_write(dev, LCDC_RGBC, rgb_ctrl);
 
-	update_scanout(crtc);
+	update_scanout(crtc, false);
 	jz4780_crtc_update_clk(crtc);
 
 	pm_runtime_put_sync(dev->dev);
@@ -550,7 +561,7 @@ irqreturn_t jz4780_crtc_irq(struct drm_crtc *crtc)
 		jz4780_write(dev, LCDC_STATE, state & ~LCDC_STATE_OFU);
 		tmp = jz4780_read(dev, LCDC_CTRL);
 		jz4780_write(dev, LCDC_CTRL, tmp & ~LCDC_CTRL_OFUM);
-		update_scanout(crtc);
+		update_scanout(crtc, false);
 		start(crtc);
 	}
 

@@ -54,6 +54,7 @@ void modeset_init(struct drm_device *dev)
 	dev->mode_config.min_height = 0;
 	dev->mode_config.max_width = 2048;
 	dev->mode_config.max_height = 2048;
+	dev->mode_config.async_page_flip = true;
 	dev->mode_config.funcs = &mode_config_funcs;
 }
 
