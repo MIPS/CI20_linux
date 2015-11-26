@@ -226,6 +226,18 @@ static void jz4780_lastclose(struct drm_device *dev)
 	drm_fbdev_cma_restore_mode(priv->fbdev);
 }
 
+static void jz4780_irq_uninstall(struct drm_device *dev)
+{
+	struct jz4780_drm_private *priv = dev->dev_private;
+	u32 tmp;
+
+	tmp = jz4780_read(dev, LCDC_CTRL);
+
+	/* disable irqs that we might have enabled */
+	jz4780_write(dev, LCDC_CTRL, tmp & ~LCDC_CTRL_EOFM);
+
+}
+
 static irqreturn_t jz4780_irq(int irq, void *arg)
 {
 	struct drm_device *dev = arg;
@@ -294,6 +306,7 @@ static struct drm_driver jz4780_driver = {
 	.lastclose          = jz4780_lastclose,
 	.set_busid          = drm_platform_set_busid,
 	.irq_handler        = jz4780_irq,
+	.irq_uninstall      = jz4780_irq_uninstall,
 	.get_vblank_counter = drm_vblank_count,
 	.enable_vblank      = jz4780_enable_vblank,
 	.disable_vblank     = jz4780_disable_vblank,

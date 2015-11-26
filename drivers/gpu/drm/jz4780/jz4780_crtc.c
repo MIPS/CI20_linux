@@ -90,6 +90,9 @@ static void set_scanout(struct drm_crtc *crtc, int n)
 	int fg0_line_size;
 	int fg0_frm_size;
 	int height_width;
+	static const uint32_t stat[] = {
+		LCDC_STATE_IFU0, LCDC_STATE_IFU1,
+	 };
 
 	gem = drm_fb_cma_get_gem_obj(fb, 0);
 	drm_fb_get_bpp_depth(fb->pixel_format, &depth, &bpp);
@@ -143,6 +146,7 @@ static void set_scanout(struct drm_crtc *crtc, int n)
 	}
 	jz4780_crtc->scanout[n] = crtc->primary->fb;
 	drm_framebuffer_reference(jz4780_crtc->scanout[n]);
+	jz4780_crtc->dirty &= ~stat[n];
 	pm_runtime_put_sync(dev->dev);
 }
 
@@ -152,6 +156,7 @@ static void update_scanout(struct drm_crtc *crtc)
 	struct drm_device *dev = crtc->dev;
 
 	if (jz4780_crtc->dpms == DRM_MODE_DPMS_ON) {
+		jz4780_crtc->dirty |= LCDC_STATE_IFU0 | LCDC_STATE_IFU1;
 		drm_vblank_get(dev, 0);
 	} else {
 		/* not enabled yet, so update registers immediately: */
@@ -503,14 +508,41 @@ out:
 irqreturn_t jz4780_crtc_irq(struct drm_crtc *crtc)
 {
 	struct drm_device *dev = crtc->dev;
+	struct drm_pending_vblank_event *event;
+	struct jz4780_crtc *jz4780_crtc = to_jz4780_crtc(crtc);
 	unsigned int state;
 	unsigned int tmp;
+	unsigned long flags;
+	uint32_t dirty;
 
 	state = jz4780_read(dev, LCDC_STATE);
+	dirty = jz4780_crtc->dirty & state;
+
+	if (dirty) {
+		if (dirty & LCDC_STATE_IFU0) {
+			jz4780_write(dev, LCDC_STATE, state & ~LCDC_STATE_IFU0);
+			set_scanout(crtc, 0);
+		}
+		if (dirty & LCDC_STATE_IFU1) {
+			jz4780_write(dev, LCDC_STATE, state & ~LCDC_STATE_IFU1);
+			set_scanout(crtc, 1);
+		}
+
+		drm_handle_vblank(dev, 0);
+
+		spin_lock_irqsave(&dev->event_lock, flags);
+		event = jz4780_crtc->event;
+		jz4780_crtc->event = NULL;
+		if (event)
+			drm_send_vblank_event(dev, 0, event);
+		spin_unlock_irqrestore(&dev->event_lock, flags);
+
+		if (dirty && !jz4780_crtc->dirty)
+			drm_vblank_put(dev, 0);
+	}
 
 	if (state & LCDC_STATE_EOF) {
 		jz4780_write(dev, LCDC_STATE, state & ~LCDC_STATE_EOF);
-		update_scanout(crtc);
 	}
 
 	if (state & LCDC_STATE_OFU) {
