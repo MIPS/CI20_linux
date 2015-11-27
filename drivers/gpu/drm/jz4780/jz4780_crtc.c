@@ -159,7 +159,7 @@ static void update_scanout(struct drm_crtc *crtc, bool async)
 		jz4780_crtc->dirty |= LCDC_STATE_IFU0 | LCDC_STATE_IFU1;
 		drm_vblank_get(dev, 0);
 	} else {
-		/* not enabled yet, so update registers immediately: */
+		/* Update registers immediately */
 		jz4780_write(dev, LCDC_STATE, 0);
 		set_scanout(crtc, 0);
 		set_scanout(crtc, 1);
@@ -521,39 +521,35 @@ irqreturn_t jz4780_crtc_irq(struct drm_crtc *crtc)
 	struct drm_device *dev = crtc->dev;
 	struct drm_pending_vblank_event *event;
 	struct jz4780_crtc *jz4780_crtc = to_jz4780_crtc(crtc);
-	unsigned int state;
 	unsigned int tmp;
 	unsigned long flags;
-	uint32_t dirty;
+	unsigned int state = jz4780_read(dev, LCDC_STATE);
+	u32 dirty = jz4780_crtc->dirty & state;
 
-	state = jz4780_read(dev, LCDC_STATE);
-	dirty = jz4780_crtc->dirty & state;
+	if (dirty & LCDC_STATE_IFU0) {
+		jz4780_write(dev, LCDC_STATE, state & ~LCDC_STATE_IFU0);
+		set_scanout(crtc, 0);
+	}
+	if (dirty & LCDC_STATE_IFU1) {
+		jz4780_write(dev, LCDC_STATE, state & ~LCDC_STATE_IFU1);
+		set_scanout(crtc, 1);
+	}
+
+	if (state & LCDC_STATE_EOF) {
+		jz4780_write(dev, LCDC_STATE, state & ~LCDC_STATE_EOF);
+		drm_handle_vblank(dev, 0);
+	}
 
 	if (dirty) {
-		if (dirty & LCDC_STATE_IFU0) {
-			jz4780_write(dev, LCDC_STATE, state & ~LCDC_STATE_IFU0);
-			set_scanout(crtc, 0);
-		}
-		if (dirty & LCDC_STATE_IFU1) {
-			jz4780_write(dev, LCDC_STATE, state & ~LCDC_STATE_IFU1);
-			set_scanout(crtc, 1);
-		}
-
-		drm_handle_vblank(dev, 0);
-
 		spin_lock_irqsave(&dev->event_lock, flags);
 		event = jz4780_crtc->event;
 		jz4780_crtc->event = NULL;
 		if (event)
 			drm_send_vblank_event(dev, 0, event);
-		spin_unlock_irqrestore(&dev->event_lock, flags);
+		 spin_unlock_irqrestore(&dev->event_lock, flags);
 
-		if (dirty && !jz4780_crtc->dirty)
+		if (!jz4780_crtc->dirty)
 			drm_vblank_put(dev, 0);
-	}
-
-	if (state & LCDC_STATE_EOF) {
-		jz4780_write(dev, LCDC_STATE, state & ~LCDC_STATE_EOF);
 	}
 
 	if (state & LCDC_STATE_OFU) {
