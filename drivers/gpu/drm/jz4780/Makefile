@@ -1,4 +1,4 @@
-ccflags-y := -Iinclude/drm
+ccflags-y := -Iinclude/linux -Iinclude/drm
 ifeq (, $(findstring -W,$(EXTRA_CFLAGS)))
 
 endif

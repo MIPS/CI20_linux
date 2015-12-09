@@ -22,8 +22,18 @@
 
 #include "drm_fb_helper.h"
 #include "dwc_hdmi.h"
+#include "hashtable.h"
+#include "reservation.h"
+
+struct jz4780_resobj {
+	struct hlist_node hlist_node;
+	struct drm_gem_object *obj;
+	struct reservation_object resobj;
+};
 
 static struct of_device_id jz4780_of_match[];
+
+static DEFINE_HASHTABLE(jz4780_resobj_hlist, 5);
 
 static struct drm_framebuffer *jz4780_fb_create(struct drm_device *dev,
 		struct drm_file *file_priv, struct drm_mode_fb_cmd2 *mode_cmd)
@@ -229,7 +239,6 @@ static void jz4780_lastclose(struct drm_device *dev)
 
 static void jz4780_irq_uninstall(struct drm_device *dev)
 {
-	struct jz4780_drm_private *priv = dev->dev_private;
 	u32 tmp;
 
 	tmp = jz4780_read(dev, LCDC_CTRL);
@@ -275,9 +284,62 @@ static void jz4780_disable_vblank(struct drm_device *dev, int crtc)
 	enable_vblank(dev, false);
 }
 
-static struct dma_buf *jz4780_drm_gem_prime_export(struct drm_device *dev,
-                        struct drm_gem_object *obj,
-                        int flags)
+static struct jz4780_resobj *jz4780_resobj_lookup(struct drm_gem_object *obj)
+{
+	struct jz4780_resobj *jz4780_resobj_cursor;
+	struct jz4780_resobj *jz4780_resobj = NULL;
+
+	hash_for_each_possible(jz4780_resobj_hlist, jz4780_resobj_cursor,
+					hlist_node, (unsigned long)obj) {
+		if (jz4780_resobj_cursor->obj == obj) {
+			jz4780_resobj = jz4780_resobj_cursor;
+			break;
+		}
+	}
+
+	return jz4780_resobj;
+}
+
+struct reservation_object *jz4780_drv_lookup_resobj(struct drm_gem_object *obj)
+{
+	struct jz4780_resobj *jz4780_resobj = jz4780_resobj_lookup(obj);
+
+	if (!jz4780_resobj) {
+		jz4780_resobj = kzalloc(sizeof(*jz4780_resobj), GFP_KERNEL);
+		if (!jz4780_resobj)
+			return NULL;
+
+		jz4780_resobj->obj = obj;
+		INIT_HLIST_NODE(&jz4780_resobj->hlist_node);
+		reservation_object_init(&jz4780_resobj->resobj);
+
+		hash_add(jz4780_resobj_hlist, &jz4780_resobj->hlist_node,
+							(unsigned long)obj);
+	}
+
+	return &jz4780_resobj->resobj;
+}
+
+static void jz4780_gem_cma_free_object(struct drm_gem_object *obj)
+{
+	struct jz4780_resobj *jz4780_resobj = jz4780_resobj_lookup(obj);
+
+	if (jz4780_resobj) {
+		hash_del(&jz4780_resobj->hlist_node);
+
+		reservation_object_wait_timeout_rcu(&jz4780_resobj->resobj,
+					true, false, MAX_SCHEDULE_TIMEOUT);
+
+		reservation_object_fini(&jz4780_resobj->resobj);
+
+		kfree(jz4780_resobj);
+	}
+
+	drm_gem_cma_free_object(obj);
+}
+
+static struct dma_buf *jz4780_gem_prime_export(struct drm_device *dev,
+					struct drm_gem_object *obj, int flags)
 {
 	/* Read/write access required */
 	flags |= O_RDWR;
@@ -311,7 +373,7 @@ static struct drm_driver jz4780_driver = {
 	.get_vblank_counter = drm_vblank_count,
 	.enable_vblank      = jz4780_enable_vblank,
 	.disable_vblank     = jz4780_disable_vblank,
-	.gem_free_object    = drm_gem_cma_free_object,
+	.gem_free_object    = jz4780_gem_cma_free_object,
 	.gem_vm_ops         = &drm_gem_cma_vm_ops,
 	.dumb_create        = drm_gem_cma_dumb_create,
 	.dumb_map_offset    = drm_gem_cma_dumb_map_offset,
@@ -319,12 +381,13 @@ static struct drm_driver jz4780_driver = {
 	.prime_handle_to_fd = drm_gem_prime_handle_to_fd,
 	.prime_fd_to_handle = drm_gem_prime_fd_to_handle,
 	.gem_prime_import   = drm_gem_prime_import,
-	.gem_prime_export   = jz4780_drm_gem_prime_export,
+	.gem_prime_export   = jz4780_gem_prime_export,
 	.gem_prime_get_sg_table = drm_gem_cma_prime_get_sg_table,
 	.gem_prime_import_sg_table = drm_gem_cma_prime_import_sg_table,
 	.gem_prime_vmap     = drm_gem_cma_prime_vmap,
 	.gem_prime_vunmap   = drm_gem_cma_prime_vunmap,
 	.gem_prime_mmap     = drm_gem_cma_prime_mmap,
+	.gem_prime_res_obj  = jz4780_drv_lookup_resobj,
 	.fops               = &fops,
 	.name               = "jz4780",
 	.desc               = "Ingenic LCD Controller DRM",

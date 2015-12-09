@@ -17,7 +17,9 @@
  * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "fence.h"
 #include "drm_flip_work.h"
+#include "drm_sync_helper.h"
 
 #include "jz4780_drv.h"
 #include "jz4780_regs.h"
@@ -48,7 +50,6 @@ struct jz4780_crtc {
 	struct drm_crtc base;
 
 	const struct jz4780_panel_info *info;
-	uint32_t dirty;
 
 	struct drm_pending_vblank_event *event;
 	int dpms;
@@ -64,6 +65,14 @@ struct jz4780_crtc {
 	/* DMA descriptors */
 	struct jz4780_framedesc *framedesc;
 	dma_addr_t framedesc_phys;
+
+	unsigned fence_context;
+	atomic_t fence_seqno;
+	struct drm_reservation_cb rcb;
+	struct fence *fence;
+	bool async_flip;
+	bool flip_busy;
+	bool finish_flip;
 };
 #define to_jz4780_crtc(x) container_of(x, struct jz4780_crtc, base)
 
@@ -90,9 +99,6 @@ static void set_scanout(struct drm_crtc *crtc, int n)
 	int fg0_line_size;
 	int fg0_frm_size;
 	int height_width;
-	static const uint32_t stat[] = {
-		LCDC_STATE_IFU0, LCDC_STATE_IFU1,
-	 };
 
 	gem = drm_fb_cma_get_gem_obj(fb, 0);
 	drm_fb_get_bpp_depth(fb->pixel_format, &depth, &bpp);
@@ -146,24 +152,15 @@ static void set_scanout(struct drm_crtc *crtc, int n)
 	}
 	jz4780_crtc->scanout[n] = crtc->primary->fb;
 	drm_framebuffer_reference(jz4780_crtc->scanout[n]);
-	jz4780_crtc->dirty &= ~stat[n];
 	pm_runtime_put_sync(dev->dev);
 }
 
-static void update_scanout(struct drm_crtc *crtc, bool async)
+static void update_scanout(struct drm_crtc *crtc)
 {
-	struct jz4780_crtc *jz4780_crtc = to_jz4780_crtc(crtc);
-	struct drm_device *dev = crtc->dev;
-
-	if (!async && (jz4780_crtc->dpms == DRM_MODE_DPMS_ON)) {
-		jz4780_crtc->dirty |= LCDC_STATE_IFU0 | LCDC_STATE_IFU1;
-		drm_vblank_get(dev, 0);
-	} else {
-		/* Update registers immediately */
-		jz4780_write(dev, LCDC_STATE, 0);
-		set_scanout(crtc, 0);
-		set_scanout(crtc, 1);
-	}
+	/* Update registers immediately */
+	jz4780_write(crtc->dev, LCDC_STATE, 0);
+	set_scanout(crtc, 0);
+	set_scanout(crtc, 1);
 }
 
 static void start(struct drm_crtc *crtc)
@@ -206,13 +203,76 @@ static void stop(struct drm_crtc *crtc)
 static void jz4780_crtc_destroy(struct drm_crtc *crtc)
 {
 	struct jz4780_crtc *jz4780_crtc = to_jz4780_crtc(crtc);
+	struct drm_device *dev = crtc->dev;
+	struct drm_pending_vblank_event *event;
+	bool vblank_put = false;
+	unsigned long flags;
+	unsigned i;
 
 	WARN_ON(jz4780_crtc->dpms == DRM_MODE_DPMS_ON);
 
-	drm_crtc_cleanup(crtc);
+	drm_reservation_cb_fini(&jz4780_crtc->rcb);
+
+	spin_lock_irqsave(&dev->event_lock, flags);
+
+	vblank_put = jz4780_crtc->flip_busy && !jz4780_crtc->async_flip;
+
+	drm_fence_signal_and_put(&jz4780_crtc->fence);
+
+	event = jz4780_crtc->event;
+	jz4780_crtc->event = NULL;
+
+	jz4780_crtc->async_flip = false;
+	jz4780_crtc->finish_flip = false;
+	jz4780_crtc->flip_busy = false;
+
+	spin_unlock_irqrestore(&dev->event_lock, flags);
+
+	if (event)
+		event->base.destroy(&event->base);
+
+	if (vblank_put)
+		drm_vblank_put(dev, 0);
+
 	drm_flip_work_cleanup(&jz4780_crtc->unref_work);
+	for (i = 0 ; i < 2; i++) {
+		if (jz4780_crtc->scanout[i])
+			drm_framebuffer_unreference(jz4780_crtc->scanout[i]);
+	}
+
+	drm_crtc_cleanup(crtc);
 
 	kfree(jz4780_crtc);
+}
+
+static void jz4780_do_page_flip(struct drm_reservation_cb *rcb,
+					void *params)
+{
+	struct jz4780_crtc *jz4780_crtc = params;
+	struct drm_crtc *crtc = &jz4780_crtc->base;
+	struct drm_device *dev = crtc->dev;
+	unsigned long flags;
+
+	if (jz4780_crtc->flip_busy) {
+		set_scanout(crtc, 0);
+		set_scanout(crtc, 1);
+
+		spin_lock_irqsave(&dev->event_lock, flags);
+		if (jz4780_crtc->flip_busy) {
+			if (jz4780_crtc->async_flip) {
+				drm_fence_signal_and_put(&jz4780_crtc->fence);
+
+				if (jz4780_crtc->event)
+					drm_send_vblank_event(dev, 0,
+							jz4780_crtc->event);
+				jz4780_crtc->event = NULL;
+				jz4780_crtc->flip_busy = false;
+			} else {
+				jz4780_crtc->finish_flip = true;
+			}
+		}
+		spin_unlock_irqrestore(&dev->event_lock, flags);
+	}
 }
 
 static int jz4780_crtc_page_flip(struct drm_crtc *crtc,
@@ -223,25 +283,66 @@ static int jz4780_crtc_page_flip(struct drm_crtc *crtc,
 	struct jz4780_crtc *jz4780_crtc = to_jz4780_crtc(crtc);
 	struct drm_device *dev = crtc->dev;
 	bool async_flip = page_flip_flags & DRM_MODE_PAGE_FLIP_ASYNC;
+	struct drm_gem_cma_object *gem_cma_obj;
+	struct reservation_object *resobj;
+	struct fence *fence;
 	unsigned long flags;
+	bool busy;
+	int ret;
 
-	if (jz4780_crtc->event) {
-		dev_err(dev->dev, "already pending page flip!\n");
+	spin_lock_irqsave(&dev->event_lock, flags);
+	busy = jz4780_crtc->flip_busy;
+	spin_unlock_irqrestore(&dev->event_lock, flags);
+	if (busy)
 		return -EBUSY;
+
+	drm_reservation_cb_init(&jz4780_crtc->rcb, jz4780_do_page_flip,
+							jz4780_crtc);
+
+	gem_cma_obj = drm_fb_cma_get_gem_obj(fb, 0);
+	resobj = jz4780_drv_lookup_resobj(&gem_cma_obj->base);
+	if (!resobj)
+		return -ENOMEM;
+
+	ret = ww_mutex_lock_interruptible(&resobj->lock, NULL);
+	if (ret)
+		return ret;
+
+	ret = reservation_object_reserve_shared(resobj);
+	if (ret) {
+		ww_mutex_unlock(&resobj->lock);
+		return ret;
 	}
 
-	crtc->primary->fb = fb;
+	fence = drm_sw_fence_new(jz4780_crtc->fence_context,
+			atomic_add_return(1, &jz4780_crtc->fence_seqno));
+	if (IS_ERR(fence)) {
+		ww_mutex_unlock(&resobj->lock);
+		return PTR_ERR(fence);
+	}
+	ret = drm_reservation_cb_add(&jz4780_crtc->rcb, resobj, false);
+	if (ret < 0) {
+		fence_put(fence);
+		ww_mutex_unlock(&resobj->lock);
+		return ret;
+	}
 
 	if (!async_flip)
-		jz4780_crtc->event = event;
+		drm_vblank_get(dev, 0);
 
-	update_scanout(crtc, async_flip);
+	spin_lock_irqsave(&dev->event_lock, flags);
+	crtc->primary->fb = fb;
+	jz4780_crtc->event = event;
+	jz4780_crtc->async_flip = async_flip;
+	jz4780_crtc->fence = fence;
+	jz4780_crtc->flip_busy = true;
+	spin_unlock_irqrestore(&dev->event_lock, flags);
 
-	if (event && async_flip) {
-		spin_lock_irqsave(&dev->event_lock, flags);
-		drm_send_vblank_event(dev, 0, event);
-		spin_unlock_irqrestore(&dev->event_lock, flags);
-	}
+	reservation_object_add_shared_fence(resobj, fence);
+
+	ww_mutex_unlock(&resobj->lock);
+
+	drm_reservation_cb_done(&jz4780_crtc->rcb);
 
 	return 0;
 }
@@ -362,7 +463,7 @@ static int jz4780_crtc_mode_set(struct drm_crtc *crtc,
 
 	jz4780_write(dev, LCDC_RGBC, rgb_ctrl);
 
-	update_scanout(crtc, false);
+	update_scanout(crtc);
 	jz4780_crtc_update_clk(crtc);
 
 	pm_runtime_put_sync(dev->dev);
@@ -519,37 +620,35 @@ out:
 irqreturn_t jz4780_crtc_irq(struct drm_crtc *crtc)
 {
 	struct drm_device *dev = crtc->dev;
-	struct drm_pending_vblank_event *event;
 	struct jz4780_crtc *jz4780_crtc = to_jz4780_crtc(crtc);
 	unsigned int tmp;
-	unsigned long flags;
 	unsigned int state = jz4780_read(dev, LCDC_STATE);
-	u32 dirty = jz4780_crtc->dirty & state;
-
-	if (dirty & LCDC_STATE_IFU0) {
-		jz4780_write(dev, LCDC_STATE, state & ~LCDC_STATE_IFU0);
-		set_scanout(crtc, 0);
-	}
-	if (dirty & LCDC_STATE_IFU1) {
-		jz4780_write(dev, LCDC_STATE, state & ~LCDC_STATE_IFU1);
-		set_scanout(crtc, 1);
-	}
 
 	if (state & LCDC_STATE_EOF) {
-		jz4780_write(dev, LCDC_STATE, state & ~LCDC_STATE_EOF);
-		drm_handle_vblank(dev, 0);
-	}
+		bool put_vblank = false;
+		unsigned long flags;
 
-	if (dirty) {
 		spin_lock_irqsave(&dev->event_lock, flags);
-		event = jz4780_crtc->event;
-		jz4780_crtc->event = NULL;
-		if (event)
-			drm_send_vblank_event(dev, 0, event);
-		 spin_unlock_irqrestore(&dev->event_lock, flags);
+		if (jz4780_crtc->finish_flip) {
+			drm_fence_signal_and_put(&jz4780_crtc->fence);
 
-		if (!jz4780_crtc->dirty)
+			if (jz4780_crtc->event)
+				drm_send_vblank_event(dev, 0,
+							jz4780_crtc->event);
+			jz4780_crtc->event = NULL;
+			jz4780_crtc->finish_flip = false;
+			jz4780_crtc->flip_busy = false;
+
+			put_vblank = true;
+		}
+		spin_unlock_irqrestore(&dev->event_lock, flags);
+
+		drm_handle_vblank(dev, 0);
+
+		if (put_vblank)
 			drm_vblank_put(dev, 0);
+
+		jz4780_write(dev, LCDC_STATE, state & ~LCDC_STATE_EOF);
 	}
 
 	if (state & LCDC_STATE_OFU) {
@@ -557,7 +656,7 @@ irqreturn_t jz4780_crtc_irq(struct drm_crtc *crtc)
 		jz4780_write(dev, LCDC_STATE, state & ~LCDC_STATE_OFU);
 		tmp = jz4780_read(dev, LCDC_CTRL);
 		jz4780_write(dev, LCDC_CTRL, tmp & ~LCDC_CTRL_OFUM);
-		update_scanout(crtc, false);
+		update_scanout(crtc);
 		start(crtc);
 	}
 
@@ -567,21 +666,34 @@ irqreturn_t jz4780_crtc_irq(struct drm_crtc *crtc)
 void jz4780_crtc_cancel_page_flip(struct drm_crtc *crtc, struct drm_file *file)
 {
 	struct jz4780_crtc *jz4780_crtc = to_jz4780_crtc(crtc);
-	struct drm_pending_vblank_event *event;
 	struct drm_device *dev = crtc->dev;
+	struct drm_pending_vblank_event *event = NULL;
+	bool put_vblank = false;
 	unsigned long flags;
 
-	/* Destroy the pending vertical blanking event associated with the
-	 * pending page flip, if any, and disable vertical blanking interrupts.
-	 */
 	spin_lock_irqsave(&dev->event_lock, flags);
-	event = jz4780_crtc->event;
-	if (event && event->base.file_priv == file) {
+	if (jz4780_crtc->flip_busy && jz4780_crtc->event &&
+				jz4780_crtc->event->base.file_priv == file) {
+		event = jz4780_crtc->event;
 		jz4780_crtc->event = NULL;
-		event->base.destroy(&event->base);
-		drm_vblank_put(dev, 0);
+
+		put_vblank = !jz4780_crtc->async_flip;
+
+		drm_fence_signal_and_put(&jz4780_crtc->fence);
+
+		jz4780_crtc->async_flip = false;
+		jz4780_crtc->finish_flip = false;
+		jz4780_crtc->flip_busy = false;
 	}
 	spin_unlock_irqrestore(&dev->event_lock, flags);
+
+	if (event) {
+		drm_reservation_cb_fini(&jz4780_crtc->rcb);
+		event->base.destroy(&event->base);
+	}
+
+	if (put_vblank)
+		drm_vblank_put(dev, 0);
 }
 
 struct drm_crtc *jz4780_crtc_create(struct drm_device *dev)
@@ -595,6 +707,9 @@ struct drm_crtc *jz4780_crtc_create(struct drm_device *dev)
 		dev_err(dev->dev, "allocation failed\n");
 		return NULL;
 	}
+
+	atomic_set(&jz4780_crtc->fence_seqno, 0);
+	jz4780_crtc->fence_context = fence_context_alloc(1);
 
 	jz4780_crtc->framedesc = dma_alloc_coherent(dev->dev,
 				 sizeof(struct jz4780_framedesc) * 2,
