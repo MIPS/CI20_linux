@@ -216,7 +216,6 @@
 
 	dm9000@6 {
 		compatible = "davicom,dm9000";
-		davicom,no-eeprom;
 
 		pinctrl-names = "default";
 		pinctrl-0 = <&pins_nemc_cs6>;
