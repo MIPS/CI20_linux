@@ -77,7 +77,7 @@
 		#size-cells = <1>;
 		ranges = <>;
 
-		tcu@0x10002000 {
+		tcu@10002000 {
 			compatible = "ingenic,jz4780-tcu";
 			reg = <0x10002000 0x140>;
 
@@ -85,7 +85,7 @@
 			interrupts = <27 26 25>;
 		};
 
-		watchdog: jz47xx-watchdog@0x10002000 {
+		watchdog: jz47xx-watchdog@10002000 {
 			compatible = "ingenic,jz4780-watchdog";
 			reg = <0x10002000 0x100>;
 
@@ -121,7 +121,7 @@
 
 		};
 
-		pinctrl@0x10010000 {
+		pinctrl@10010000 {
 			compatible = "ingenic,jz4780-pinctrl";
 			reg = <0x10010000 0x600>;
 
@@ -509,7 +509,7 @@
 			clock-names = "baud", "module";
 		};
 
-		i2c0: i2c0@0x10050000 {
+		i2c0: i2c0@10050000 {
 			compatible = "ingenic,jz4780-i2c";
 			reg = <0x10050000 0x1000>;
 
@@ -522,7 +522,7 @@
 			#size-cells = <0>;
 		};
 
-		i2c1: i2c1@0x10051000 {
+		i2c1: i2c1@10051000 {
 			compatible = "ingenic,jz4780-i2c";
 			reg = <0x10051000 0x1000>;
 
@@ -535,7 +535,7 @@
 			#size-cells = <0>;
 		};
 
-		i2c2: i2c2@0x10052000 {
+		i2c2: i2c2@10052000 {
 			compatible = "ingenic,jz4780-i2c";
 			reg = <0x10052000 0x1000>;
 
@@ -548,7 +548,7 @@
 			#size-cells = <0>;
 		};
 
-		i2c3: i2c3@0x10053000 {
+		i2c3: i2c3@10053000 {
 			compatible = "ingenic,jz4780-i2c";
 			reg = <0x10053000 0x1000>;
 
@@ -561,7 +561,7 @@
 			#size-cells = <0>;
 		};
 
-		i2c4: i2c4@0x10054000 {
+		i2c4: i2c4@10054000 {
 			compatible = "ingenic,jz4780-i2c";
 			reg = <0x10054000 0x1000>;
 
@@ -574,7 +574,7 @@
 			#size-cells = <0>;
 		};
 
-		lpcr: lcr@0x10000004 {
+		lpcr: lcr@10000004 {
 			compatible = "ingenic,jz4780-lcr";
 			reg = <0x10000004 0x4>;
 
@@ -588,7 +588,7 @@
 			};
 		};
 
-		adc@0x10070000 {
+		adc@10070000 {
 			compatible = "ingenic,jz4780-adc";
 			reg = <0x10070000 0x30>;
 
@@ -607,7 +607,7 @@
 		ranges = <>;
 
 
-		lcd: jz4780-lcdk@0x13050000 {
+		lcd: jz4780-lcdk@13050000 {
 			compatible = "ingenic,jz4780-lcd";
 			reg = <0x13050000 0x1800>;
 
@@ -621,7 +621,7 @@
 			ddc = <&i2c4>;
 		};
 
-		cim: jz4780-cim@0x13060000 {
+		cim: jz4780-cim@13060000 {
 			compatible = "ingenic,jz4780-cim";
 			reg = <0x13060000 0x68>;
 			reg-shift = <2>;
@@ -636,7 +636,7 @@
 			clock-names = "cim", "module";
 		};
 
-		hdmi: jz4780-hdmi3@0x10180000 {
+		hdmi: jz4780-hdmi3@10180000 {
 			compatible = "synopsys,dwc-hdmi";
 			reg = <0x10180000 0x8000>;
 			reg-shift = <2>;
@@ -726,7 +726,7 @@
 			dma-names = "rx-tx";
 		};
 
-		ehci: jz4780-ehci@0x13490000 {
+		ehci: jz4780-ehci@13490000 {
 			compatible = "ingenic,jz4780-ehci";
 			reg = <0x13490000 0x10000>;
 
@@ -736,7 +736,7 @@
 			clocks = <&cgu JZ4780_CLK_UHC>;
 		};
 
-		ohci: jz4780-ohci@0x134a0000 {
+		ohci: jz4780-ohci@134a0000 {
 			compatible = "ingenic,jz4780-ohci";
 			reg = <0x134a0000 0x10000>;
 
@@ -761,7 +761,7 @@
 			#phy-cells = <0>;
 		};
 
-		usb_otg: jz4780-otg@0x13500000 {
+		usb_otg: jz4780-otg@13500000 {
 			compatible = "snps,dwc2";
 			reg = <0x13500000 0x40000>;
 
